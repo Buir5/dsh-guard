@@ -1,0 +1,5 @@
+2026-11-04 23:26:13 refresh failed: KeyError('offset')
+2026-11-04 23:26:21 stash refreshed from asar: 7 file(s)
+2026-11-04 23:26:27 heal restored 8 file(s), missing=office,office-docx,office-pptx,office-xlsx,office-render,office-recalculate,office-export-pdf
+2026-11-04 23:27:15 heal restored 8 file(s), missing=office,office-docx,office-pptx,office-xlsx,office-render,office-recalculate,office-export-pdf
+2026-11-04 23:28:00 installer detected, killed 0: 
