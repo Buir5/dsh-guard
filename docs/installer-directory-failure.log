@@ -1,0 +1,18 @@
+﻿Operation: MoveFileExW
+Windows error: 5 (拒绝访问。)
+Source: e:\DeepSeek
+Destination: e:\DeepSeek.old-{3905A249-8A06-4188-B8D2-48716AE1C73B}
+Restoration error: 0
+Time: 2026-10-30 10:46:04
+Windows: 10.0.26200
+Attempts:
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5
+backup: Windows error: 5

@@ -82,6 +82,82 @@ Get-Content C:\ProgramData\dsh-guard\guard.log -Tail 20
 powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
 ```
 
+## 我是怎么定位的（完整过程）
+
+### 时间线（2026-11-04）
+
+| 时间 | 事件 |
+|---|---|
+| 23:17:14 | 第一次弹窗，`crash-2026-11-04T14-17-14-host.log` |
+| 23:18:24 / 23:19:05 / 23:19:26 / 23:20:00 | 连续复现，每次点「重启」都再弹 |
+| 23:20:25 | 第六份崩溃日志，2,676 B，内容完全一致 |
+| 23:21:01 | `resources\runtime\office-skills` 的 CreationTime（更新收尾才落盘） |
+
+六份日志、同一个栈、同一个缺失路径 —— 说明不是随机故障，是**确定的时序竞争**。
+
+### 证据 1：崩溃栈（docs/crash-host.log）
+
+```
+DesktopHostFatalError
+  at file:///E:/DeepSeek/resources/app.asar/lib/main.js:10026:49
+  at readFileSync
+  at E:/DeepSeek/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-skill-office/lib/index.js:64:38
+  at new apply (…dsh-skill-office/lib/index.js:61:33)
+```
+
+宿主在启动阶段同步加载技能包，读文件抛 ENOENT → 直接 fatal，没有任何降级路径。
+
+### 证据 2：安装器日志（docs/installer-directory-failure.log）
+
+```
+Operation: MoveFileExW
+Windows error: 5 (拒绝访问。)
+Source: e:\DeepSeek
+Destination: e:\DeepSeek.old-{3905A249-...}
+Restoration error: 0
+Time: 2026-10-30 10:46:04
+```
+
+旧目录改名失败（有进程占着句柄），安装器退化成**原地覆盖**：先删 `resources\runtime`，再逐项解压。这个空窗期就是崩溃窗口。10-24 也有一条同样的日志，说明是常态而非偶发。
+
+### 推理链
+
+1. **为什么偏偏是 SKILL.md？** 解开 asar 读源码：`dsh-desktop-host` 里 `assetRoot = join(dirname(config.source), "office-skills")`，而 `config.source` = `process.resourcesPath\runtime\primary-runtime`，所以技能目录固定指向 `runtime\office-skills`。
+2. **为什么一个文件缺失就崩？** `dsh-skill-office` 的 `apply(ctx, config)` 对 7 个技能名逐个 `readFileSync(join(assetRoot, name, "SKILL.md"))`，无 try/catch，第一个缺失即抛。
+3. **为什么每次更新都可能踩中？** 安装器 error 5 → 原地覆盖 → runtime 先空后满；应用在这个窗口被拉起（更新完自动启动、或用户手快双击）就必崩。
+4. **排除项**：文件权限（SYSTEM 可正常读写）、磁盘损坏（重新解压 20,519 文件全通过）、第三方插件冲突（禁用全部插件后仍弹，崩点在宿主内部）、asar 损坏（能正常列出目录树）。
+
+### 为什么不直接改 JS 打补丁
+
+- 补丁写进 `app.asar`：下次更新整包替换，补丁消失。
+- 补丁写进解开目录 `resources\app`：需要把 `app.asar` 改名让 Electron 走目录，更新同样会重建 asar。
+- 结论：**任何贴在包里的补丁都活不过一次更新**。所以把修复放在文件系统层，与版本解耦。
+
+### 设计取舍
+
+| 选择 | 原因 |
+|---|---|
+| 0.4 秒轮询，不用计划任务 | 弹窗发生在启动瞬间，分钟级定时来不及 |
+| stash 放 `C:\ProgramData\dsh-guard` | 不受用户 profile 清理、漫游影响 |
+| 安装器存在时只清理一次（120 s 窗口） | 避免把安装完自动启动的新实例误杀 |
+| 手写 asar 解析（`base = 12 + json_len + 4`） | 不依赖 Electron / node，pythonw 直接跑 |
+| 只动 `runtime\office-skills` | 不碰用户数据、不碰配置，可逆 |
+
+### 验证
+
+把技能目录改名，两秒内被补回：
+
+```
+> ren E:\DeepSeek\resources\runtime\office-skills office-skills.bak
+> type C:\ProgramData\dsh-guard\guard.log
+2026-11-04 23:26:27 heal restored 8 file(s), missing=office,office-docx,office-pptx,office-xlsx,office-render,office-recalculate,office-export-pdf
+```
+
+同时把 `app.asar` 改名/替换后，stash 会自动刷新：
+
+```
+2026-11-04 23:31:02 stash refreshed from asar: 7 file(s)
+```
 ## FAQ
 
 **会不会影响更新？** 不会。它只在安装器运行期间清理旧进程，更新照常进行。
@@ -110,6 +186,14 @@ and refreshes the stash whenever `app.asar` changes.
 **Install.** `powershell -ExecutionPolicy Bypass -File install.ps1` (admin).
 **Uninstall.** add `-Uninstall`.
 
+**How it was diagnosed.** Six identical crash logs (23:17–23:20) all end in the same
+`readFileSync` inside `dsh-skill-office/lib/index.js:64`; the updater log shows
+`MoveFileExW / Windows error: 5` when renaming `e:\DeepSeek`, so the installer falls back
+to in-place overwrite and empties `resources\runtime` first. The guard sits at the
+filesystem layer because any patch inside `app.asar` or `resources\app` is erased by the
+next update. Raw evidence: [`docs/crash-host.log`](docs/crash-host.log),
+[`docs/installer-directory-failure.log`](docs/installer-directory-failure.log),
+[`docs/guard.log.sample.txt`](docs/guard.log.sample.txt).
 MIT License.
 
 ---
