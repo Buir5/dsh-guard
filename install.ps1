@@ -6,10 +6,12 @@
 #>
 param(
     [string]$AppDir = '',
-    [string]$Python = ''
+    [string]$Python = '',
+    [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
 function Fail($m) { Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
+if ($Uninstall) { & (Join-Path $PSScriptRoot 'uninstall.ps1'); exit $LASTEXITCODE }
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Fail 'run this in an elevated PowerShell (Run as Administrator)'
